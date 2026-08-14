@@ -1,0 +1,5 @@
+# Request
+sensor_msgs/Image rgb_image
+---
+# Response
+detection_msgs/BoundingBox[] boxes

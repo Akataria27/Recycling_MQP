@@ -1,0 +1,16 @@
+Commands 
+To build the node
+cd ~/RBE595
+rm -rf build/ install/ log/
+source /opt/ros/humble/setup.bash
+colcon build --packages-select camera_interfaces --symlink-install
+
+
+
+
+To run the node 
+cd ~/RBE595
+source install/setup.bash
+ros2 run camera_module camera_node
+ros2 pkg executables camera_module
+

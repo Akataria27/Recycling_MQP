@@ -1,0 +1,5 @@
+ros2 run tf2_ros static_transform_publisher   0.05 0 0   0 0 0   panda_link8 camera_frame
+
+ros2 launch grasp_bringup grasp_pipeline.launch.py
+
+ros2 launch franka_moveit_config moveit_real_arm_platform.launch.py robot_ip:=172.16.0.2 use_fake_hardware:=False load_gripper:=True 
