@@ -115,6 +115,7 @@ class RealSenseObstacleNode(Node):
         pcd = open3d.geometry.PointCloud()
         pcd.points = open3d.utility.Vector3dVector(points_np)
 
+        # Principle Component Analysis (PCA)
         xy = numpy.asarray(points_np, dtype=float)[:, :2]
         center = xy.mean(axis=0)
         centered = xy - center
