@@ -1,0 +1,55 @@
+# Colcon / ament / ROS2 build artifacts
+/build/
+/install/
+/log/
+/build_isolated/
+/install_isolated/
+/devel/
+
+# colcon/ament caches
+.colcon/
+.rosinstall
+
+# Python artifacts and virtual envs
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+*.egg-info/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.tox/
+
+# Editor configs and OS files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
+
+# CMake / build system leftovers
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Logs, swap files, backups
+*.log
+*.swp
+*~
+*.bak
+
+# Binary / compiled objects
+*.o
+*.so
+*.a
+*.dylib
+*.dll
+*.exe
