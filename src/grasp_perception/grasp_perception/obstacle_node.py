@@ -1,15 +1,11 @@
-#!/usr/bin/env python3
 import rclpy
-from rclpy.node import Node
-from sensor_msgs.msg import PointCloud2
-from std_msgs.msg import Header
 import sensor_msgs_py.point_cloud2 as pc2
 import numpy
 import open3d
 import pyrealsense2
-from std_msgs.msg import Float32MultiArray
-from std_msgs.msg import Float32
-
+from rclpy.node import Node
+from sensor_msgs.msg import PointCloud2
+from std_msgs.msg import Header, Float32, Float32MultiArray
 
 class RealSenseObstacleNode(Node):
     def __init__(self):
@@ -25,6 +21,7 @@ class RealSenseObstacleNode(Node):
         self.config.enable_stream(pyrealsense2.stream.depth, 640, 480, pyrealsense2.format.z16, 30)
         self.config.enable_stream(pyrealsense2.stream.color, 640, 480, pyrealsense2.format.rgb8, 30)
         self.r = True
+
         # Start Camera
         try:
             profile = self.pipeline.start(self.config)
@@ -32,7 +29,7 @@ class RealSenseObstacleNode(Node):
             self.depth_scale = depth_sensor.get_depth_scale()
             self.get_logger().info(f"RealSense Connected. Scale: {self.depth_scale}")
             depth_sensor.set_option(pyrealsense2.option.enable_auto_exposure, 0)
-            depth_sensor.set_option(pyrealsense2.option.exposure, 5000.0)
+            depth_sensor.set_option(pyrealsense2.option.exposure, 8000.0)
 
             # Wait...
             for _ in range(100):
@@ -44,7 +41,7 @@ class RealSenseObstacleNode(Node):
 
         # Processing Blocks
         self.align = pyrealsense2.align(pyrealsense2.stream.color)
-        self.pc_gen = pyrealsense2.pointcloud() 
+        self.pointcloud = pyrealsense2.pointcloud() 
 
         # --- ROS2 ---
         # My Subscription
@@ -57,12 +54,9 @@ class RealSenseObstacleNode(Node):
         # My Timer
         self.timer = self.create_timer(1.0/30.0, self.timer_cb)
 
-        self.prev = numpy.zeros((1, 10))
-
-        # Coordinates baby!
+        # Coordinates
         self.x_obj = 100
         self.y_obj = 100
-
 
     def command_cb(self, msg):
         print(float(f"{msg.data[0]:.5f}"), float(f"{msg.data[1]:.5f}"))
@@ -71,44 +65,46 @@ class RealSenseObstacleNode(Node):
 
     def timer_cb(self):
         # 1. Get Frames
-
         frames = self.pipeline.wait_for_frames()
         aligned_frames = self.align.process(frames)
         depth_frame = aligned_frames.get_depth_frame()
 
         if not depth_frame: 
+            self.get_logger().fatal('not good')
             return
 
         # 2. Generate Pyrealsense2 Point Cloud
-        points_rs = self.pc_gen.calculate(depth_frame)
+        points = self.pointcloud.calculate(depth_frame)
         
         # 3. Convert to NumPy Array
-        vtx = numpy.asanyarray(points_rs.get_vertices())
+        vtx = numpy.asanyarray(points.get_vertices())
         points_np = vtx.view(numpy.float32).reshape(-1, 3)
 
-        # 4. Remove Table
-        min_depth = .2
-        max_depth = 0.44 # we think at 42 cm it cant see table, try 43.5, 44, etc
-        mask = (points_np[:, 2] >= min_depth) & (points_np[:, 2] <= max_depth) # creates a list of booleans
-        points_np = points_np[mask] # numpy uses boolean indexing
+        # 4. Z Clamp
+        MIN_DEPTH = .2
+        MAX_DEPTH = 0.44 # we think at 42 cm it cant see table, try 43.5, 44, etc
+        mask = (points_np[:, 2] >= MIN_DEPTH) & (points_np[:, 2] <= MAX_DEPTH)
+        points_np = points_np[mask]
 
         # 5. Square XY
-        search = 0.05
+        SEARCH = 0.05
+        X_LOWER, X_UPPER = self.x_obj - SEARCH, self.x_obj + SEARCH
+        Y_LOWER, Y_UPPER = self.y_obj - SEARCH, self.y_obj + SEARCH
         if len(points_np) > 0:
-            mask = (points_np[:, 0] >= self.x_obj-search) & (points_np[:, 0] <= self.x_obj + search) # must use & instead of and
+            mask = (points_np[:, 0] >= X_LOWER) & (points_np[:, 0] <= X_UPPER)
             points_np = points_np[mask]
-        if len(points_np) > 0:
-            mask = (points_np[:, 1] >= self.y_obj-search) & (points_np[:, 1] <= self.y_obj + search)
+
+            mask = (points_np[:, 1] >= Y_LOWER) & (points_np[:, 1] <= Y_UPPER)
             points_np = points_np[mask]
 
         # 6. Minimum Z + Offset
-        offset = 0.02
+        OFFSET = 0.02
         if len(points_np) > 0:
             min_z = points_np[:, 2].min()
-            mask = (points_np[:, 2] >= min_z) & (points_np[:, 2] <= min_z + offset)
+            mask = (points_np[:, 2] >= min_z) & (points_np[:, 2] <= min_z + OFFSET)
             points_np = points_np[mask]
 
-        if len(points_np) < 200: 
+        if len(points_np) < 800: 
             return  
     
         # 7. Create Point Cloud In Open3D

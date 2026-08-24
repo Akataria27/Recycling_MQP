@@ -1,11 +1,9 @@
-#!/usr/bin/env python3
 import rclpy
-from rclpy.node import Node
-from std_msgs.msg import String
-from std_msgs.msg import Float32MultiArray
-from std_srvs.srv import Trigger
 import panda_py
-import time 
+from rclpy.node import Node
+from std_msgs.msg import String, Float32MultiArray
+from std_srvs.srv import Trigger
+from time import sleep
 
 temp = [[0.1, -0.1]]
 
@@ -29,14 +27,13 @@ class StateMachine(Node):
         self.srv = self.create_service(Trigger, 'publish_command', self.handle_trigger)
 
         # Wait for RVIZ to Open
-        time.sleep(5)
+        sleep(5)
 
         # Go
         self.coordsend()
 
     def n(self):
-        msg = String()
-        msg.data = "start"
+        msg = String(data='start')
         self.send_instruct.publish(msg)
 
     def handle_ex(self, msg):
@@ -49,12 +46,10 @@ class StateMachine(Node):
             print("\n not good \n")
 
     def coordsend(self):
-        print(temp[self.count])
         if self.ready_send == "ready":
-            msg = Float32MultiArray()
-            msg.data = temp[self.count]
+            msg = Float32MultiArray(data=temp[self.count])
             self.send_coord.publish(msg)
-            time.sleep(2)
+            sleep(2)
             self.n()
             self.count +=1
             if self.count == len(temp):
