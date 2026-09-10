@@ -7,6 +7,13 @@ from rclpy.node import Node
 from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import Header, Float32, Float32MultiArray
 
+# my constants
+MIN_DEPTH = .2
+MAX_DEPTH = 0.80 # we think at .85 m it cant see table, try more values
+
+SEARCH = 0.1
+
+OFFSET = 0.05
 class RealSenseObstacleNode(Node):
     def __init__(self):
         super().__init__('realsense_obstacle_node')
@@ -22,6 +29,9 @@ class RealSenseObstacleNode(Node):
         self.config.enable_stream(pyrealsense2.stream.color, 640, 480, pyrealsense2.format.rgb8, 30)
         self.r = True
 
+        self.spatial = pyrealsense2.spatial_filter()
+        self.temporal = pyrealsense2.temporal_filter()
+
         # Start Camera
         try:
             profile = self.pipeline.start(self.config)
@@ -29,7 +39,7 @@ class RealSenseObstacleNode(Node):
             self.depth_scale = depth_sensor.get_depth_scale()
             self.get_logger().info(f"RealSense Connected. Scale: {self.depth_scale}")
             depth_sensor.set_option(pyrealsense2.option.enable_auto_exposure, 0)
-            depth_sensor.set_option(pyrealsense2.option.exposure, 8000.0)
+            depth_sensor.set_option(pyrealsense2.option.exposure, 4000.0)
 
             # Wait...
             for _ in range(100):
@@ -72,41 +82,47 @@ class RealSenseObstacleNode(Node):
         if not depth_frame: 
             self.get_logger().fatal('not good')
             return
+        depth_frame = self.temporal.process(depth_frame)
+        depth_frame = self.spatial.process(depth_frame)
 
         # 2. Generate Pyrealsense2 Point Cloud
         points = self.pointcloud.calculate(depth_frame)
+
+        if points.size() == 0:
+            print('0')
+            return
         
         # 3. Convert to NumPy Array
         vtx = numpy.asanyarray(points.get_vertices())
         points_np = vtx.view(numpy.float32).reshape(-1, 3)
 
         # 4. Z Clamp
-        MIN_DEPTH = .2
-        MAX_DEPTH = 0.44 # we think at 42 cm it cant see table, try 43.5, 44, etc
         mask = (points_np[:, 2] >= MIN_DEPTH) & (points_np[:, 2] <= MAX_DEPTH)
         points_np = points_np[mask]
-
-        # 5. Square XY
-        SEARCH = 0.05
+       
+        #if numpy.mean(points_np[:, 0]) < -0.1:
+            #return
+    
+        #5. Square XY
         X_LOWER, X_UPPER = self.x_obj - SEARCH, self.x_obj + SEARCH
         Y_LOWER, Y_UPPER = self.y_obj - SEARCH, self.y_obj + SEARCH
         if len(points_np) > 0:
             mask = (points_np[:, 0] >= X_LOWER) & (points_np[:, 0] <= X_UPPER)
             points_np = points_np[mask]
-
+        if len(points_np) > 0:
             mask = (points_np[:, 1] >= Y_LOWER) & (points_np[:, 1] <= Y_UPPER)
             points_np = points_np[mask]
 
+        
         # 6. Minimum Z + Offset
-        OFFSET = 0.02
-        if len(points_np) > 0:
-            min_z = points_np[:, 2].min()
-            mask = (points_np[:, 2] >= min_z) & (points_np[:, 2] <= min_z + OFFSET)
-            points_np = points_np[mask]
+        # if len(points_np) > 0:
+        #     min_z = points_np[:, 2].min()
+        #     mask = (points_np[:, 2] >= min_z) & (points_np[:, 2] <= min_z + OFFSET)
+        #     points_np = points_np[mask]
 
-        if len(points_np) < 800: 
+        if len(points_np) <= 1000: 
             return  
-    
+        
         # 7. Create Point Cloud In Open3D
         pcd = open3d.geometry.PointCloud()
         pcd.points = open3d.utility.Vector3dVector(points_np)

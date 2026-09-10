@@ -5,7 +5,7 @@ from std_msgs.msg import String, Float32MultiArray
 from std_srvs.srv import Trigger
 from time import sleep
 
-temp = [[0.1, -0.1]]
+temp = [[0, 0]]
 
 class StateMachine(Node):
     def __init__(self):
@@ -27,7 +27,7 @@ class StateMachine(Node):
         self.srv = self.create_service(Trigger, 'publish_command', self.handle_trigger)
 
         # Wait for RVIZ to Open
-        sleep(5)
+        sleep(6)
 
         # Go
         self.coordsend()
@@ -49,12 +49,11 @@ class StateMachine(Node):
         if self.ready_send == "ready":
             msg = Float32MultiArray(data=temp[self.count])
             self.send_coord.publish(msg)
-            sleep(2)
+            sleep(1)
             self.n()
             self.count +=1
             if self.count == len(temp):
                 self.count = 0
-
         
     def handle_trigger(self, request, response):
         self.coordsend()

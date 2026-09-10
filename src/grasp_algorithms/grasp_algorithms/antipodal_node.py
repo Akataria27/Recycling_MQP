@@ -48,22 +48,27 @@ class AntipodalNode(Node):
         center_cam_z = raw_pts[:,2].min()
 
         # 3. Transform Camera Coordinates to Base Coordinates
-        # MISSING SIGNIFICANT DIGITS
-        y = (center_cam_x - .03) * -1.0 + 0.02
-        x = -1*center_cam_y + .35 + .02
-        top_z = .6 - center_cam_z + .265 +.015
+        BASE_LINK_TO_TABLE = 0.098
+        CAMERA_T0_TABLE = 0.47
+        X_TRANSLATION = .84 # used to be .35
+        Y_TRANSLATION = .37
+        Z_TRANSLATION = None
+        x = (center_cam_x + X_TRANSLATION) + 0.015
+        y = center_cam_y + Y_TRANSLATION
+        top_z = .9 - center_cam_z + .265 + .015
 
-        self.get_logger().warn(f"\n Target Pose: \n x: {x} \n y: {y} \n top_z: {top_z}")
-        self.get_logger().warn(f"\n X MEAN: {numpy.mean(raw_pts[:,0])} \n Y MEAN: {numpy.mean(raw_pts[:,1])}")
+        self.get_logger().info(f"\n Before Transformation: \n x: {center_cam_x} \n y: {center_cam_y} \n top_z: {center_cam_z}")
+        self.get_logger().warn(f"\n After Transformation: \n x: {x} \n y: {y} \n top_z: {top_z}")
 
         # 4. Define Grasp Candidate
         g = GraspCandidate()
         g.pose = Pose(position=Point(x=x, y=y, z=top_z), 
                       orientation=Quaternion(x=0.926, y=-0.378, z=-0.002, w=-0.001))
         g.angle = self.angle
+        g.type = 'bottle'
         
         self.pub.publish(g)
-        self.get_logger().info(f"Top-Down Grasp Published.")
+        self.get_logger().info(f"Grasp Candidate Is Published.")
 
         # 5. End State
         self.search = "wait"

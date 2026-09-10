@@ -8,7 +8,6 @@ class TaskPlannerNode(Node):
         super().__init__('task_planner')
         
 
-
 def main(args=None):
     rclpy.init(args=args)
     node = TaskPlannerNode()
