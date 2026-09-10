@@ -53,3 +53,8 @@ Makefile
 *.dylib
 *.dll
 *.exe
+
+
+
+src/franka_arm_ros2
+src/my_node/my_node/__pycache__/node.cpython-310.pyc

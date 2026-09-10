@@ -1,37 +1,37 @@
 import rclpy
+import pymoveit2
+import panda_py
 from rclpy.node import Node
 from grasp_interfaces.msg import GraspCandidate
 from std_msgs.msg import String
-import copy
-import pymoveit2
 from franka_msgs.msg import FrankaState
-import panda_py
 from math import pi
-from scipy.spatial.transform import Rotation as R
-
-Z_offset = 0.25
+from scipy.spatial.transform import Rotation
+from franka_msgs.srv import ErrorRecovery
+from time import sleep
+Z_offset = 0.5 # 0.225 is good
 
 def final_angle(angle):
     if angle > pi/2:
-        angle = 1*(angle - pi)
+        angle = angle - pi
     elif angle < -pi/2:
-        angle = 1*(angle+pi)
+        angle = angle + pi
     return angle
 
 class PandaGraspExecutor(Node):
     def __init__(self):
         super().__init__('panda_grasp_executor')
         self.collide = False
-        
-        # good group
-        good = rclpy.callback_groups.MutuallyExclusiveCallbackGroup()
 
         # subscribe to my youtube channel
-        self.sub = self.create_subscription(GraspCandidate, '/grasp_candidates', self.callback, 10)
-        self.state_sub = self.create_subscription(FrankaState,'/franka_robot_state_broadcaster/robot_state', self.franka_state_callback, 1, callback_group=good)
+        self.sub = self.create_subscription(GraspCandidate, '/grasp_candidates', self.callback, 1)
+        self.state_sub = self.create_subscription(FrankaState,'/franka_robot_state_broadcaster/robot_state', self.franka_state_callback, 1, callback_group=rclpy.callback_groups.ReentrantCallbackGroup())
 
         # My Publishers
         self.send_state = self.create_publisher(String, '/state', 1)
+
+        # Client
+        self.recover = self.create_client(ErrorRecovery, '/error_recovery_service_server/error_recovery')
 
         # PyMoveit2
         self.moveit2 = pymoveit2.MoveIt2(
@@ -40,45 +40,71 @@ class PandaGraspExecutor(Node):
             base_link_name = "panda_link0",
             end_effector_name = "panda_link8",
             group_name = "panda_arm", 
-            callback_group=good
+            callback_group=rclpy.callback_groups.MutuallyExclusiveCallbackGroup()
         )
-
         # Declare State
         self.state = "not_runnin"
 
+    def ready_state(self):
+        ready_joints = [
+            0.0,          # panda_joint1
+            -0.785398163, # panda_joint2
+            0.0,          # panda_joint3
+            -2.356194490, # panda_joint4
+            0.0,          # panda_joint5
+            1.570796327,  # panda_joint6
+            0.785398163   # panda_joint7
+        ]
+        self.moveit2.move_to_configuration(
+            joint_positions = ready_joints,
+            joint_names = None,
+            tolerance = 0.001,
+            weight = 1.0
+        )
+
+
     # Reflex Behaviour (ASK ROS2 GUY)
     def franka_state_callback(self, msg):
-        if msg.robot_mode == 4:
-            self.get_logger().fatal('REFLEX')
-            print('hi')
-            self.moveit2.cancel_execution()
-            panda_py.Panda('172.16.0.2').recover()
-            panda_py.Panda('172.16.0.2').move_to_start()
-            panda_py.libfranka.Gripper('172.16.0.2').move(0.08, 0.1)
+        if self.collide:
+            if msg.robot_mode == 4:
+                req = ErrorRecovery.Request()
+                future = self.recover.call_async(req)
+                # spin_until_future_complete breaks nodes 
+                print(future.result()) # this will probably not print success because reentrant group
+                return
 
-    # Callback
+        elif msg.robot_mode == 4:
+            self.get_logger().fatal('REFLEX')
+            self.moveit2.cancel_execution()
+            self.collide = True
+
+    # Main Callback
     def callback(self, msg):
-        self.get_logger().info("Candidate received! Locking executor...")
+        self.get_logger().info("Candidate received!")
         self.state = "runnin"
         self.send_state.publish(String(data=self.state))
         
         if self.state == 'runnin':
-            hover_pose = msg
+            grasp_candidate = msg
 
             # 1. HOVER
-            self.get_logger().info(f"1. Moving to Pre-Grasp (Z={hover_pose.pose.position.z:.3f})...")
-            target = copy.deepcopy(hover_pose.pose)
+            self.get_logger().info(f"1. Moving to Pre-Grasp")
 
-            q = (R.from_quat([target.orientation.x, target.orientation.y, target.orientation.z, target.orientation.w]) * R.from_euler('z', final_angle(hover_pose.angle))).as_quat()
+            # 1.5. Multiply 2 Quaternions
+            q_ref = Rotation.from_quat([grasp_candidate.pose.orientation.x, grasp_candidate.pose.orientation.y, grasp_candidate.pose.orientation.z, grasp_candidate.pose.orientation.w])
+            q_future = Rotation.from_euler('z', final_angle(grasp_candidate.angle))
+            q = q_ref * q_future
+            q = q.as_quat()
 
-            target.orientation.x = q[0]
-            target.orientation.y = q[1]
-            target.orientation.z = q[2]
-            target.orientation.w = q[3]
-            
+            grasp_candidate.pose.orientation.x = q[0]
+            grasp_candidate.pose.orientation.y = q[1]
+            grasp_candidate.pose.orientation.z = q[2]
+            grasp_candidate.pose.orientation.w = q[3]
+
+            grasp_candidate.pose.position.y -= 0 # prediction
             self.moveit2.move_to_pose(
-                position=[target.position.x, target.position.y, target.position.z],
-                quat_xyzw=[target.orientation.x, target.orientation.y, target.orientation.z, target.orientation.w],
+                position=[grasp_candidate.pose.position.x, grasp_candidate.pose.position.y, grasp_candidate.pose.position.z],
+                quat_xyzw=[grasp_candidate.pose.orientation.x, grasp_candidate.pose.orientation.y, grasp_candidate.pose.orientation.z, grasp_candidate.pose.orientation.w],
                 frame_id="panda_link0",
                 cartesian=True
             )
@@ -86,66 +112,63 @@ class PandaGraspExecutor(Node):
        
             # 2. Drop
             self.get_logger().info("2. Descending to Grasp...")
-            target.position.z -= Z_offset
+            grasp_candidate.pose.position.z -= Z_offset
             self.moveit2.move_to_pose(
-                position=[target.position.x, target.position.y, target.position.z],
-                quat_xyzw=[target.orientation.x, target.orientation.y, target.orientation.z, target.orientation.w],
+                position=[grasp_candidate.pose.position.x, grasp_candidate.pose.position.y, grasp_candidate.pose.position.z],
+                quat_xyzw=[grasp_candidate.pose.orientation.x, grasp_candidate.pose.orientation.y, grasp_candidate.pose.orientation.z, grasp_candidate.pose.orientation.w],
                 frame_id="panda_link0",
                 cartesian=True
             )
             self.moveit2.wait_until_executed()
+
+            # 2.5. Check for Collision (David patent)
+            if self.collide:
+                self.ready_state()
+                self.moveit2.wait_until_executed()
+                sleep(2)
+                print('i am here')
+                self.state = 'not runnin'
+                self.send_state.publish(String(data=self.state))
+                self.collide = False
+                return
 
             # 3. Gripper Close
             self.get_logger().info("3. Closing Gripper...")
             panda_py.libfranka.Gripper('172.16.0.2').grasp(width=0.0, speed=0.1, force=100, epsilon_inner=0.1, epsilon_outer=1.0)
 
             # 4. Lift
-            target.position.z += Z_offset
+            grasp_candidate.pose.position.z += Z_offset
             self.moveit2.move_to_pose(
-                position=[target.position.x, target.position.y, target.position.z],
-                quat_xyzw=[target.orientation.x, target.orientation.y, target.orientation.z, target.orientation.w],
+                position=[grasp_candidate.pose.position.x, grasp_candidate.pose.position.y, grasp_candidate.pose.position.z],
+                quat_xyzw=[grasp_candidate.pose.orientation.x, grasp_candidate.pose.orientation.y, grasp_candidate.pose.orientation.z, grasp_candidate.pose.orientation.w],
                 frame_id="panda_link0",
                 cartesian=True
             )
             self.moveit2.wait_until_executed()
 
-            # 5. Move to Bin
-            target.position.x = 0.27
-            target.position.y = 0.2
+            # 5. Move to Somewhere
+            grasp_candidate.pose.position.x = .27
+            grasp_candidate.pose.position.y = .080
                     
             self.moveit2.move_to_pose(
-                position=[target.position.x, target.position.y, target.position.z],
-                quat_xyzw=[target.orientation.x, target.orientation.y, target.orientation.z, target.orientation.w],
+                position=[grasp_candidate.pose.position.x, grasp_candidate.pose.position.y, grasp_candidate.pose.position.z],
+                quat_xyzw=[grasp_candidate.pose.orientation.x, grasp_candidate.pose.orientation.y, grasp_candidate.pose.orientation.z, grasp_candidate.pose.orientation.w],
                 frame_id="panda_link0",
                 cartesian=True
             )
             self.moveit2.wait_until_executed()
 
-            # 6. Open Gripper
-            self.get_logger().info("Grasp Complete. Unlocking in 5s...")
+            # 6. Gripper Open
+            self.get_logger().info("Grasp Complete. Unlocking...")
             panda_py.libfranka.Gripper('172.16.0.2').move(0.08, 0.1)
 
             # 7. Return to Ready
-            ready_joints = [
-                0.0,          # panda_joint1
-                -0.785398163, # panda_joint2
-                0.0,          # panda_joint3
-                -2.356194490, # panda_joint4
-                0.0,          # panda_joint5
-                1.570796327,  # panda_joint6
-                0.785398163   # panda_joint7
-            ]
-            self.moveit2.move_to_configuration(
-                joint_positions = ready_joints,
-                joint_names = None,
-                tolerance = 0.001,
-                weight = 1.0
-            )
+            self.ready_state()
             self.moveit2.wait_until_executed()
-            self.get_logger().info("Ready Reached")
 
-            # End State
+            # 8. End State
             self.state = 'not runnin'
+            self.get_logger().info("Done")
             self.send_state.publish(String(data=self.state))
 
 def main():
