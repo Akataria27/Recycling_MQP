@@ -1,0 +1,9 @@
+source;share/beckhoff_good/hook/pythonpath.ps1
+source;share/beckhoff_good/hook/pythonpath.dsv
+source;share/beckhoff_good/hook/pythonpath.sh
+source;share/beckhoff_good/hook/ament_prefix_path.ps1
+source;share/beckhoff_good/hook/ament_prefix_path.dsv
+source;share/beckhoff_good/hook/ament_prefix_path.sh
+source;../../build/beckhoff_good/share/beckhoff_good/hook/pythonpath_develop.ps1
+source;../../build/beckhoff_good/share/beckhoff_good/hook/pythonpath_develop.dsv
+source;../../build/beckhoff_good/share/beckhoff_good/hook/pythonpath_develop.sh

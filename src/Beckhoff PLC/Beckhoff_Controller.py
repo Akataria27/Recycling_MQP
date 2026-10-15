@@ -40,6 +40,7 @@ class BeckhoffSystem:
             self.plc = None
             return False, f"Connection failed: {e}"
 
+
     def disconnect(self):
         try:
             if self.plc:

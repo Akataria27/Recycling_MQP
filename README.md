@@ -20,7 +20,7 @@ This project implements a complete control and grasping system for the Franka Em
 ## Project Structure
 
 ```
-RBE595/
+Recycling_MQP/
 ├── src/
 │   ├── franka_arm_ros2/                # Official Franka ROS 2 integration
 │   │   ├── franka_bringup/             # Launch and configuration for robot bring-up
@@ -434,16 +434,10 @@ ros2 launch franka_description visualize_franka.launch.py
 ```bash
 # Check network connectivity to robot
 ping 172.16.0.2
-
-# Check for Franka errors
-ros2 service call /franka_error_recovery_service_server trigger_error_recovery
 ```
-
 #### 2. Launch Single Arm Hardware Control
 ```bash
-ros2 launch franka_moveit_config moveit_real_arm_platform.launch.py \
-  robot_ip:=172.16.0.2 \
-  use_fake_hardware:=false
+ros2 launch franka_moveit_config moveit_real_arm_platform.launch.py
 ```
 #### 3. Launch Example Controller
 ```bash
@@ -699,10 +693,10 @@ Success/Failure ← Feedback and result
 
 ---
 
-### Beckhoff High Level Controller
+### Beckhoff PLC
 **Purpose**: Integration with Beckhoff PLC systems
 
-**File**: `beckhoff.py` - Communication interface with industrial controllers
+**File**: `gopal.py` - Communication interface with industrial controllers
 
 ---
 
@@ -862,6 +856,6 @@ python3 -m pytest src/grasp_algorithms/test/test_antipodal.py
 
 ---
 
-**Last Updated**: rn 
-**Maintainer**: David Li contact at (woshilixinde@gmail.com)
+**Last Updated**: right now
+**Maintainer**: sponge bob and patrick in the mickey mouse club house
 **Repository**: https://github.com/Akataria27/Recycling_MQP.git

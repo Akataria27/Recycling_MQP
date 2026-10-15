@@ -9,20 +9,24 @@ from math import pi
 from scipy.spatial.transform import Rotation
 from franka_msgs.srv import ErrorRecovery
 from time import sleep
-Z_offset = 0.5 # 0.225 is good
+
+Z_drop = 0.285 #0.185 is good
+Z_lift = 0.25 #0.25
+
+CONVEYOR_SPEED = 0.0785398163397
 
 def final_angle(angle):
     if angle > pi/2:
         angle = angle - pi
     elif angle < -pi/2:
         angle = angle + pi
-    return angle
+    return angle - pi/2
 
 class PandaGraspExecutor(Node):
     def __init__(self):
         super().__init__('panda_grasp_executor')
         self.collide = False
-
+        print('hi')
         # subscribe to my youtube channel
         self.sub = self.create_subscription(GraspCandidate, '/grasp_candidates', self.callback, 1)
         self.state_sub = self.create_subscription(FrankaState,'/franka_robot_state_broadcaster/robot_state', self.franka_state_callback, 1, callback_group=rclpy.callback_groups.ReentrantCallbackGroup())
@@ -42,6 +46,11 @@ class PandaGraspExecutor(Node):
             group_name = "panda_arm", 
             callback_group=rclpy.callback_groups.MutuallyExclusiveCallbackGroup()
         )
+
+        # this only affects move to config????
+        # self.moveit2.max_velocity = 0.1
+        # self.moveit2.max_acceleration = 0.1
+
         # Declare State
         self.state = "not_runnin"
 
@@ -62,8 +71,7 @@ class PandaGraspExecutor(Node):
             weight = 1.0
         )
 
-
-    # Reflex Behaviour (ASK ROS2 GUY)
+    # Reflex Behaviour
     def franka_state_callback(self, msg):
         if self.collide:
             if msg.robot_mode == 4:
@@ -74,8 +82,8 @@ class PandaGraspExecutor(Node):
                 return
 
         elif msg.robot_mode == 4:
-            self.get_logger().fatal('REFLEX')
-            self.moveit2.cancel_execution()
+            self.get_logger().fatal('Reflext Detected. Aborting Movement...')
+            self.moveit2.cancel_execution() # COULD BE REDUNDANT, DO GOALS GET REMOVED WHEN REFLEX STATE?
             self.collide = True
 
     # Main Callback
@@ -84,24 +92,27 @@ class PandaGraspExecutor(Node):
         self.state = "runnin"
         self.send_state.publish(String(data=self.state))
         
-        if self.state == 'runnin':
-            grasp_candidate = msg
+        grasp_candidate = msg
 
-            # 1. HOVER
-            self.get_logger().info(f"1. Moving to Pre-Grasp")
+        if self.state == 'runnin' and grasp_candidate.type  == 4:
+            
+            self.get_logger().fatal(f'angle: {grasp_candidate.angle} \n type: {grasp_candidate.type}')
 
-            # 1.5. Multiply 2 Quaternions
+            # 0. Multiply 2 Quaternions
             q_ref = Rotation.from_quat([grasp_candidate.pose.orientation.x, grasp_candidate.pose.orientation.y, grasp_candidate.pose.orientation.z, grasp_candidate.pose.orientation.w])
             q_future = Rotation.from_euler('z', final_angle(grasp_candidate.angle))
             q = q_ref * q_future
             q = q.as_quat()
+
+            # 1. HOVER
+            self.get_logger().info(f"1. Hover Above Object")
 
             grasp_candidate.pose.orientation.x = q[0]
             grasp_candidate.pose.orientation.y = q[1]
             grasp_candidate.pose.orientation.z = q[2]
             grasp_candidate.pose.orientation.w = q[3]
 
-            grasp_candidate.pose.position.y -= 0 # prediction
+            grasp_candidate.pose.position.y -= 6 * CONVEYOR_SPEED
             self.moveit2.move_to_pose(
                 position=[grasp_candidate.pose.position.x, grasp_candidate.pose.position.y, grasp_candidate.pose.position.z],
                 quat_xyzw=[grasp_candidate.pose.orientation.x, grasp_candidate.pose.orientation.y, grasp_candidate.pose.orientation.z, grasp_candidate.pose.orientation.w],
@@ -109,10 +120,22 @@ class PandaGraspExecutor(Node):
                 cartesian=True
             )
             self.moveit2.wait_until_executed()
+
+            if self.collide:
+                self.get_logger().info("Returning to Ready State...")
+                self.ready_state()
+                self.moveit2.wait_until_executed()
+                sleep(1)
+                print('i am here')
+                self.state = 'not runnin'
+                self.send_state.publish(String(data=self.state))
+                self.collide = False
+                return
        
             # 2. Drop
             self.get_logger().info("2. Descending to Grasp...")
-            grasp_candidate.pose.position.z -= Z_offset
+
+            grasp_candidate.pose.position.z -= Z_drop
             self.moveit2.move_to_pose(
                 position=[grasp_candidate.pose.position.x, grasp_candidate.pose.position.y, grasp_candidate.pose.position.z],
                 quat_xyzw=[grasp_candidate.pose.orientation.x, grasp_candidate.pose.orientation.y, grasp_candidate.pose.orientation.z, grasp_candidate.pose.orientation.w],
@@ -123,43 +146,71 @@ class PandaGraspExecutor(Node):
 
             # 2.5. Check for Collision (David patent)
             if self.collide:
+                self.get_logger().info("Returning to Ready State...")
                 self.ready_state()
                 self.moveit2.wait_until_executed()
-                sleep(2)
+                sleep(1)
                 print('i am here')
                 self.state = 'not runnin'
                 self.send_state.publish(String(data=self.state))
                 self.collide = False
                 return
-
+            
             # 3. Gripper Close
             self.get_logger().info("3. Closing Gripper...")
-            panda_py.libfranka.Gripper('172.16.0.2').grasp(width=0.0, speed=0.1, force=100, epsilon_inner=0.1, epsilon_outer=1.0)
+            panda_py.libfranka.Gripper('172.16.0.2').grasp(width=0.0, speed=1.0, force=100, epsilon_inner=0.1, epsilon_outer=1.0)
 
             # 4. Lift
-            grasp_candidate.pose.position.z += Z_offset
-            self.moveit2.move_to_pose(
-                position=[grasp_candidate.pose.position.x, grasp_candidate.pose.position.y, grasp_candidate.pose.position.z],
-                quat_xyzw=[grasp_candidate.pose.orientation.x, grasp_candidate.pose.orientation.y, grasp_candidate.pose.orientation.z, grasp_candidate.pose.orientation.w],
-                frame_id="panda_link0",
-                cartesian=True
-            )
+            # grasp_candidate.pose.position.z += Z_lift 
+            # self.moveit2.move_to_pose(
+            #     position=[grasp_candidate.pose.position.x, grasp_candidate.pose.position.y, grasp_candidate.pose.position.z],
+            #     quat_xyzw=[grasp_candidate.pose.orientation.x, grasp_candidate.pose.orientation.y, grasp_candidate.pose.orientation.z, grasp_candidate.pose.orientation.w],
+            #     frame_id="panda_link0",
+            #     cartesian=True
+            # )
+            self.ready_state()
             self.moveit2.wait_until_executed()
 
-            # 5. Move to Somewhere
-            grasp_candidate.pose.position.x = .27
-            grasp_candidate.pose.position.y = .080
-                    
+            # 5. Move to Bin (Very Stupid Right Now)
+
+            print(f'object type: {grasp_candidate.type}')
+
+            TYPE_TARGETS = {
+                2: (-0.26, -0.3), # Paper
+                4: (-0.24, 0.35), # Plastic
+                1: (-0.35, 0.38), # Metal
+                3: (0.55, 0.080),
+            }
+            grasp_candidate.pose.position.x, grasp_candidate.pose.position.y = TYPE_TARGETS[grasp_candidate.type]
             self.moveit2.move_to_pose(
-                position=[grasp_candidate.pose.position.x, grasp_candidate.pose.position.y, grasp_candidate.pose.position.z],
+                position=[grasp_candidate.pose.position.x, grasp_candidate.pose.position.y, grasp_candidate.pose.position.z + 0.25],
                 quat_xyzw=[grasp_candidate.pose.orientation.x, grasp_candidate.pose.orientation.y, grasp_candidate.pose.orientation.z, grasp_candidate.pose.orientation.w],
                 frame_id="panda_link0",
-                cartesian=True
+                cartesian=False
             )
             self.moveit2.wait_until_executed()
+            # if grasp_candidate.type != 2:
+            #     self.moveit2.move_to_pose(
+            #         position=[grasp_candidate.pose.position.x, grasp_candidate.pose.position.y, grasp_candidate.pose.position.z],
+            #         quat_xyzw=[grasp_candidate.pose.orientation.x, grasp_candidate.pose.orientation.y, grasp_candidate.pose.orientation.z, grasp_candidate.pose.orientation.w],
+            #         frame_id="panda_link0",
+            #         cartesian=False
+            #     )
+            #     self.moveit2.wait_until_executed()
+            # elif grasp_candidate.type == 2:
+            #     grasp_candidate.pose.position.y = -0.25
+            #     self.moveit2.move_to_pose(
+            #                         position=[grasp_candidate.pose.position.x, grasp_candidate.pose.position.y, grasp_candidate.pose.position.z],
+            #                         quat_xyzw=[grasp_candidate.pose.orientation.x, grasp_candidate.pose.orientation.y, grasp_candidate.pose.orientation.z, grasp_candidate.pose.orientation.w],
+            #                         frame_id="panda_link0",
+            #                         tolerance_position= 0.05,
+            #                         tolerance_orientation= 0.05,
+            #                         cartesian=False
+            #                     )
+            #     self.moveit2.wait_until_executed()
 
             # 6. Gripper Open
-            self.get_logger().info("Grasp Complete. Unlocking...")
+            self.get_logger().info("6. Grasp Complete. Unlocking...")
             panda_py.libfranka.Gripper('172.16.0.2').move(0.08, 0.1)
 
             # 7. Return to Ready
