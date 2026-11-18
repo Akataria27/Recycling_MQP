@@ -7,8 +7,6 @@ from rclpy.node import Node
 from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import Header, Float32, Float32MultiArray
 
-from sklearn.cluster import DBSCAN
-
 MIN_DEPTH = .20
 MAX_DEPTH = 0.80 # we think at .80 m it cant see table, try more values
 

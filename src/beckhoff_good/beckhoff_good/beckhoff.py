@@ -1,10 +1,11 @@
 import rclpy
 from rclpy.node import Node
 from time import sleep
-from std_msgs.msg import Float32MultiArray
 import pyads
-from grasp_interfaces.msg import GraspCandidate
-
+from grasp_interfaces.msg import GraspCandidate, TrackedObjectArray, TrackedObject
+import numpy as np
+from rclpy.time import Time
+from std_msgs.msg import String
 # Configuration parameters
 
 LINUX_IP = "169.254.100.100" # ipv4 of ethernet port that connects to PLC
@@ -13,99 +14,86 @@ LINUX_NETID = "169.254.100.100.1.1" # add .1.1 to LINUX_IP
 
 PLC_IP = "169.254.184.218" # windows >> twincat ide >> ...
 PLC_NETID = "5.155.180.125.1.1" # windows >> twincat ide >> ...
-
-# pyads.add_route(PLC_NETID, PLC_IP)
-def verify_connect():
-    pyads.open_port()
-
-    # i think only do this once; check in windows >> twincat >> static routes
-    route = pyads.add_route_to_plc(
-        sending_net_id=LINUX_NETID,
-        adding_host_name=LINUX_IP,
-        ip_address=PLC_IP,
-        username="Administrator",
-        password="1",
-        route_name="Linux"
-    )
-    plc = pyads.Connection(PLC_NETID, pyads.PORT_TC3PLC1, PLC_IP)
-
-    try:
-        plc.open()
-        print(f'{plc.read_state()}') # (5, 0) means PLC is in run mode and will listen to pyads
-        
-    except Exception as e:
-        print(f"\nException: {e}")
-        print('ERROR IN EXECUTING, CHECK EXCEPTION')
-        print('ERROR IN EXECUTING, CHECK EXCEPTION')
-        print('ERROR IN EXECUTING, CHECK EXCEPTION')
-        print('ERROR IN EXECUTING, CHECK EXCEPTION')
-    finally:
-        plc.close()
-
-    pyads.close_port()
-
-#verify_connect() #un commnet this when staritng. we want to first verifiy that we have a connection before running the node
+speed = 0.0785398163397
 
 class Gopal(Node):
     def __init__(self):
         super().__init__('Gopal')
-        print('hi')
-        # self.sub = self.create_subscription(Float32MultiArray, '/gantry_object_cloud', self.callback, 1)
-        self.sub = self.create_subscription(GraspCandidate, '/grasp_candidates', self.cand_callback, 1)
+        self._logger.warn('\033[1mIs HDD LED green? Was Gantry Homed?\033[0m')
+        
+        # Subscription
+        self.sub = self.create_subscription(TrackedObject, '/gantry/target', self.callback, 1)
+
+        # 
         self.obj_x = None
         self.obj_y = None
         self.obj_stamp = None   # rclpy Time
+
+        # Publisher
+        self.send_state = self.create_publisher(String, '/gantry_state', 1)
         
-    def cand_callback(self, msg):
-        if self.obj_stamp is not None:   # already got one, ignore
-            return
-
-        self.obj_x = msg.pose.position.x
-        self.obj_y = msg.pose.position.y
-        self.obj_stamp = self.get_clock().now()
-
-        self.get_logger().info(
-            f"Saved x={self.obj_x:.4f}, y={self.obj_y:.4f}, "
-            f"t={self.obj_stamp.nanoseconds * 1e-9:.3f}s"
-        )
-
-        # Stop receiving further messages
-        self.destroy_subscription(self.sub)
-        self.sub = None
-
-    def callback(self, msg): # YOU HAVE ACCESS TO OBJECT x and Y, solve for how long it will take for object to get there with the time stamp and conveyor speed and thatll tell you when to activate gantry.
-        # object_x_position, object_y_position = msg.data[0], msg.data[1]
-
-
-        # Take time stamp 
-        #Step 1.
-        # please convert it to whatever the gantry uses
-
-        return # remove this when working on the code
-    
-        # Step 2. Open connection
-        # make it move
+        # PYADS
         pyads.open_port()
-        plc = pyads.Connection(PLC_NETID, pyads.PORT_TC3PLC1, PLC_IP)
-        
         try:
-            plc.open()
-            print(f'{plc.read_state()}') # (5, 0) means PLC is in run mode
+            # check in windows >> twincat >> static routes
+            # if a route has not been added:
+            # run this code once, then comment this
 
-            # fill code here 
-        
+            # route = pyads.add_route_to_plc(
+            #     sending_net_id=LINUX_NETID,
+            #     adding_host_name=LINUX_IP,
+            #     ip_address=PLC_IP,
+            #     username="Administrator",
+            #     password="1",
+            #     route_name="Linux")
+
+            self.plc = pyads.Connection(PLC_NETID, pyads.PORT_TC3PLC1, PLC_IP)
+            self.plc.open()
+
+            self._logger.info('Connection verfied. Now waiting for TrackedObject')
+            self.send_state.publish(String(data='not runnin'))
+
         except Exception as e:
-            print(f"\nException: {e}")
-            print('ERROR IN EXECUTING, CHECK EXCEPTION')
-            print('ERROR IN EXECUTING, CHECK EXCEPTION')
-            print('ERROR IN EXECUTING, CHECK EXCEPTION')
-            print('ERROR IN EXECUTING, CHECK EXCEPTION')
-        finally:
-            plc.close()
+            self._logger.fatal(f"\nException -> {e}")
+            pyads.close_port()
+            self.destroy_node()
+            if rclpy.ok():
+                rclpy.shutdown()
+            raise SystemExit
+        
+    def callback(self, msg):
+        self.send_state.publish(String(data='runnin'))
+        self._logger.info('TrackedObject Received!')
+
+        Y_DISTANCE_BETWEEN = 1.31 # check again
+
+        # if self.obj_stamp is not None:   # already got one, ignore
+        #     return
+        dt = (self.get_clock().now() - Time.from_msg(msg.header.stamp)).nanoseconds * 1e-9
+        
+        delay = int((Y_DISTANCE_BETWEEN + msg.position.y)/speed - dt) - 3
+        x_now = msg.position.x
+
+        # My cool transformation
+        x_cmd = 39000 + int(x_now * 100000) # 1000 machine unit is 1 cm # 39000
+
+        print(dt)
+        print(delay)
+        self.plc.write_by_name("MAIN.rCmdX", x_cmd)
+        self.plc.write_by_name("MAIN.nPickDelayMs", delay*1000)
+        self.plc.write_by_name("MAIN.nStatus", 3)
+
+        sleep(0.5)
+
+        # david patent wait until executed
+        while self.plc.read_by_name("MAIN.nStatus") != 2:
+            print(self.plc.read_by_name("MAIN.nStatus"))
+            sleep(2)
+        print('done????')
 
         #Step 3. Close
-        pyads.close_port()
-        sleep(20) # keep, don't worry about this
+        self.send_state.publish(String(data='not runnin'))
+        self._logger.info('Finished Executing... Waiting for Tracked Object')
 
 def main():
     rclpy.init()
@@ -113,6 +101,7 @@ def main():
     try:
         rclpy.spin(node)
     finally:
+        pyads.close_port()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
